@@ -1,21 +1,18 @@
 @tf.function
 def pearsoncoeff(windows_centered_flattened, weights_centered_flattened):
   """This function assumes weights and windows are already mean centered.
-  windows_centered of shape (batch, n_windows_h, n_windows_w, ws1*ws2*n_ch_in)
-  weights_centered of shape (window_size1 * window_size2 * n_ch_in, n_ch_out)
+  windows_centered_flattened of shape (batch, n_windows_h, n_windows_w, ws1*ws2*n_ch_in)
+  weights_centered_flattened of shape (window_size1 * window_size2 * n_ch_in, n_ch_out)
   Outputs are 'flat' pearson coefficients"""
   # Numerator is the dot product of each window and the kernel, i.e. sum of products of same-index values
-  # i.e. matmul with result (n_windows, n_ch_out)
+  # i.e. matmul with result (batch, n_windows_h, n_windows_w, n_ch_out)
   numerator = tf.einsum("ijkh,hl->ijkl", windows_centered_flattened, weights_centered_flattened)
+  
   # Denominator is the product of l2-norms (euclidean norms, vector magnitudes)
-  # print(weights_centered_flattened.shape)
-  # windows_centered_flattened = tf.reshape(windows_centered_flattened, shape=(windows_centered_flattened.shape[0],
-  #                                                                            ))
   denominator = tf.math.multiply(tf.norm(windows_centered_flattened, axis=3, keepdims=True)+1e-12,
                                  tf.norm(weights_centered_flattened, axis=0, keepdims=True)+1e-12,
                                  )
-  # denominator = tf.einsum("ijkh,hl->ijkl", windows_centered_flattened, weights_centered_flattened)
-
+  # Pearson coefficient is the result of frac(numerator, denominator), with shape (batch, n_windows_h, n_windows_w, n_ch_out)
   pearson_coeff_flat = tf.math.divide(numerator, denominator)
   return pearson_coeff_flat
 
@@ -26,9 +23,9 @@ def sample_pearsoncoeff(x_sample, kernel, padding_val="SAME", strides=(1,1), rat
   Kernel weights are assumed already mean centered.
   Outputs are 2-D matrix of the pearson coefficients between windows and kernel"""
   if padding_val=="same":
-    padding_val=="SAME"
+    padding_val="SAME"
   elif padding_val=="valid":
-    padding_val=="VALID"
+    padding_val="VALID"
 
   stride1, stride2 = strides
   rate1, rate2 = rates
@@ -46,24 +43,39 @@ def sample_pearsoncoeff(x_sample, kernel, padding_val="SAME", strides=(1,1), rat
   # Mean-center windows
   x_windows_means = tf.reduce_mean(x_windows, axis=[3], keepdims=True)
   x_windows_centered = tf.math.subtract(x_windows, x_windows_means)
-  # print(x_windows_centered.shape)
+  
   # Compute correlations between windows and kernel that apply
-  # x_windows_centered_flattened = tf.reshape(x_windows_centered, 
-  #                                           shape=[x_windows_centered.shape[0], 
-  #                                                  x_windows_centered.shape[1]*x_windows_centered.shape[2], x_windows_centered.shape[3]])
-  y_windows_pearson = pearsoncoeff(x_windows_centered, weights_flattened) # shape (n_windows, n_ch_out)
-
-  # Reshape correlations with abt (x.shape[0], ~x.shape[1], ~x.shape[2], x.shape[3])
+  y_windows_pearson = pearsoncoeff(x_windows_centered, weights_flattened) # shape (batch, n_windows_h, n_windows_w, n_ch_out)
+  
+  # Reshape correlations with (x.shape[0], n_windows_h, n_windows_h, x.shape[3])
   y_shape1 = x_windows.get_shape().as_list()[1]
   y_shape2 = x_windows.get_shape().as_list()[2]
   y_pearson = tf.reshape(y_windows_pearson, [-1, y_shape1, y_shape2, n_ch_out])
   return y_pearson
 
-class StandardizedConv2DWithCall(tf.keras.layers.Conv2D):
+class PearsonConv2D(tf.keras.layers.Conv2D):
     def call(self, inputs):
-        batch_size = tf.shape(inputs)[0]
-        # inputs.set_shape(shape=(batch_size, inputs.shape[1], inputs.shape[2], inputs.shape[3]))
-        kernel_centered = self.kernel - tf.math.reduce_mean(self.kernel, axis=[0,1,2], keepdims=True)
-        outputs = sample_pearsoncoeff(inputs, kernel_centered)
-        # outputs.set_shape(shape=(batch_size, outputs.shape[1], outputs.shape[2], outputs.shape[3]))
+        # batch_size = tf.shape(inputs)[0]
+        if self.groups==1:
+          kernel_centered = self.kernel - tf.math.reduce_mean(self.kernel, axis=[0,1,2], keepdims=True)
+          outputs = sample_pearsoncoeff(inputs, kernel_centered)
+        else:
+          group = 0
+          outputs_partial = tf.TensorArray(tf.float32, size=group, dynamic_size=True)
+          while group < self.groups:
+            kernel = self.kernel[:, :, :, (group*(self.filters//self.groups)):((group+1)*(self.filters//self.groups))]
+            kernel_centered = kernel - tf.math.reduce_mean(kernel, axis=[0,1,2], keepdims=True)
+            outputs_group = sample_pearsoncoeff(inputs[:, :, :, (group*(inputs.shape[3]//self.groups)):((group+1)*(inputs.shape[3]//self.groups))],
+                                                kernel_centered,
+                                                padding_val=self.padding,
+                                                strides=self.strides,
+                                                rates=self.dilation_rate)
+            outputs_partial = outputs_partial.write(group, tf.transpose(outputs_group, perm=[3,1,2,0]))
+            group += 1
+          outputs = tf.transpose(outputs_partial.concat(), perm=[3,1,2,0])
+          ouputs = outputs.set_shape([inputs.shape[0], outputs.shape[1], outputs.shape[2], self.filters])
+        if self.use_bias:
+          outputs += self.bias
+        if self.activation is not None:
+            return self.activation(outputs)
         return outputs

@@ -9,11 +9,11 @@ def pearsoncoeff(windows_centered_flattened, weights_centered_flattened):
   numerator = tf.einsum("ijkh,hl->ijkl", windows_centered_flattened, weights_centered_flattened)
   
   # Denominator is the product of l2-norms (euclidean norms, vector magnitudes)
-  denominator = tf.math.multiply(tf.norm(windows_centered_flattened, axis=3, keepdims=True)+1e-12,
-                                 tf.norm(weights_centered_flattened, axis=0, keepdims=True)+1e-12,
+  denominator = tf.math.multiply(tf.norm(windows_centered_flattened, axis=3, keepdims=True)+1e-7,
+                                 tf.norm(weights_centered_flattened, axis=0, keepdims=True)+1e-7,
                                  )
   # Pearson coefficient is the result of frac(numerator, denominator), with shape (batch, n_windows_h, n_windows_w, n_ch_out)
-  pearson_coeff_flat = tf.math.divide(numerator, denominator)
+  pearson_coeff_flat = tf.math.divide(numerator, denominator+1e-7)
   return pearson_coeff_flat
 
 @tf.function

@@ -9,14 +9,15 @@ Alternative implementations[1][2] are not inheriting the flexibility of `tf.kera
 Implementation in [1] automatically implements a nonlinearity (exponent $p$ in the definition), and recommends using MaxAbsPooling, which is equivalent to MaxPooling after mirroring the negative side of the activation above the x axis.
 
 # Background
-
+Luo, Zhang, Yang on "Cosine Normalization" https://arxiv.org/abs/1702.05870.
 # Motivation
-
+Convolution and cross-correlation do not operate as commonly narrated, i.e. by finding pixel patterns similar to the filters.
 # Objective
-
+Finding a better suited operation to measure similarity between input patches and filters.
 # Methods
-
+Cosine similarity and Pearson correlation between a patch and a filter.
 # Results
+Let's compute and see!
 
 # References
 [1] https://github.com/brohrer/sharpened-cosine-similarity
